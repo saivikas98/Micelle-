@@ -6,6 +6,7 @@ from scipy.integrate import quad, solve_ivp
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+
 # ==============================================================================
 # PAGE CONFIGURATION
 # ==============================================================================
