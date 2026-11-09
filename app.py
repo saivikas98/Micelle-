@@ -680,7 +680,7 @@ with tab1:
             ["Surfactant Space (HCO-40 % vs. Octoxynol-40 %)",
              "Chemical Stability Space (Initial pH vs. Storage Temp °C)"]
         )
-        grid_res = st.select_slider("Contour Grid Resolution", options=[12, 16, 20], value=15)
+        
         st.markdown("**MODR Criteria:** $S_R(24\\text{ mo}) \\le 1.00$, $18 \\le D_h \\le 24.5\\text{ nm}$, $6.5 \\le \\text{pH} \\le 7.2$.")
 
     with c_right:
