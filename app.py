@@ -6,6 +6,7 @@ from scipy.integrate import solve_ivp
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+
 # ==============================================================================
 # 1. PAGE CONFIGURATION (MUST BE FIRST STREAMLIT COMMAND)
 # ==============================================================================
