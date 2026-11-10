@@ -6,6 +6,9 @@ from scipy.integrate import solve_ivp
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+# ==============================================================================
+# 1. PAGE CONFIGURATION
+# ==============================================================================
 st.set_page_config(
     page_title="Nanomicellar Ophthalmic QbD, PBE & Filtration Workbench",
     layout="wide",
@@ -13,36 +16,32 @@ st.set_page_config(
 )
 
 def trapz_compat(y, x):
-    return np.trapezoid(y, x) if hasattr(np, "trapezoid") else np.trapz(y, x)
+    if hasattr(np, "trapezoid"):
+        return float(np.trapezoid(y, x))
+    return float(np.trapz(y, x))
 
 k_B = 1.380649e-23
 N_A = 6.02214076e23
 R_gas = 8.314462
 
 # ==============================================================================
-# DEFAULT PHYSICAL, THERMODYNAMIC, KINETIC & MEMBRANE CONSTANTS
+# 2. DEFAULT PHYSICAL, THERMODYNAMIC, KINETIC & MEMBRANE CONSTANTS
 # ==============================================================================
 DEFAULT_CONSTANTS = {
-    # Molecular Weights & Geometry
     "MW_1": 2500.0, "MW_2": 1966.0, "MW_CsA": 1202.61,
     "vt_1": 1.48, "vt_2": 0.36, "v_CsA": 1.74,
     "a0_shield": 0.42, "N_EO": 40.0, "l_EO": 0.36, "v_EO": 0.065,
     "sigma_core": 0.030,
-    # Micellization Thermodynamics
     "CMC1_ref": 0.014, "CMC2_ref": 0.160,
     "dH_mic1": -12500.0, "dH_mic2": -9800.0,
     "ks_1": 1.15, "ks_2": 0.95, "kp_1": 0.18, "kp_2": 0.15,
     "I_ionic": 0.125, "beta_buf": 0.035,
-    # Hansen Solubility Parameters [d_d, d_p, d_h] (MPa^0.5)
     "d1_d": 17.2, "d1_p": 4.5, "d1_h": 6.8,
     "d2_d": 18.4, "d2_p": 3.2, "d2_h": 4.1,
     "dC_d": 17.8, "dC_p": 5.1, "dC_h": 7.4,
-    # Colloidal DLVO & Ester Hydrolysis Kinetics
     "A_eff": 0.85e-20, "Ea_hyd": 78500.0,
     "k_H": 1.8e-2, "k_0": 4.5e-4, "k_OH": 8.2e2,
-    # Reactor Hydrodynamics (PBE)
     "N_p": 1.27, "N_q": 0.72,
-    # 0.22 um Membrane Adsorption Parameters (Active Selected Polymer Override)
     "A_sp": 26.0, "eps_m": 0.78, "tau_m": 1.55, "rho_p": 1.37,
     "qmax_CsA_I": 1.65, "KL_CsA_I": 52.0,
     "qmax_surf_I": 2.80, "KL_surf_I": 45.0,
@@ -70,9 +69,12 @@ MEMBRANE_PRESETS = {
 
 if "consts" not in st.session_state:
     st.session_state.consts = DEFAULT_CONSTANTS.copy()
+else:
+    for k_def, v_def in DEFAULT_CONSTANTS.items():
+        st.session_state.consts.setdefault(k_def, v_def)
 
 # ==============================================================================
-# CORE FIRST-PRINCIPLES PHYSICS FUNCTIONS
+# 3. CORE FIRST-PRINCIPLES PHYSICS FUNCTIONS
 # ==============================================================================
 def chi_EO_water(T):
     return 0.81 - 110.5 / T
@@ -100,7 +102,7 @@ def solve_mixed_cmc(C1, C2, T, c_pvp_wt, beta_12, c):
         cmc_m = 1.0 / (alpha_1 / (g1 * CMC1) + (1.0 - alpha_1) / (g2 * CMC2))
         a1 = (alpha_1 * cmc_m) / (x1 * CMC1)
         a2 = ((1.0 - alpha_1) * cmc_m) / ((1.0 - x1) * CMC2)
-        if a1 <= 0 or a2 <= 0:
+        if a1 <= 0.0 or a2 <= 0.0:
             return 0.0
         return (x1 ** 2) * np.log(a1) - ((1.0 - x1) ** 2) * np.log(a2)
 
@@ -120,7 +122,8 @@ def solve_mixed_cmc(C1, C2, T, c_pvp_wt, beta_12, c):
 
 def solve_equilibrium_micelle(C1, C2, C_CsA_mM, T, c_pvp_wt, beta_12, c):
     th = solve_mixed_cmc(C1, C2, T, c_pvp_wt, beta_12, c)
-    x1, x2 = th["x1"], 1.0 - th["x1"]
+    x1 = th["x1"]
+    x2 = 1.0 - x1
     v_tail_avg = x1 * c["vt_1"] + x2 * c["vt_2"]
     chi_ew = chi_EO_water(T)
     sigma_kT = (c["sigma_core"] * 1e-18) / (k_B * T)
@@ -136,7 +139,7 @@ def solve_equilibrium_micelle(C1, C2, C_CsA_mM, T, c_pvp_wt, beta_12, c):
         mu_steric = 1.85 * c["N_EO"] * (c["v_EO"] / (area * R_c)) ** 0.85 * solv_q
         return mu_int + mu_def + mu_steric
 
-    res = minimize_scalar(delta_mu_kT, bounds=(25, 450), method="bounded")
+    res = minimize_scalar(delta_mu_kT, bounds=(25.0, 450.0), method="bounded")
     N_agg = float(res.x)
     V_core = N_agg * v_tail_avg * 1.22
     R_c = float(((3.0 * V_core) / (4.0 * np.pi)) ** (1.0 / 3.0))
@@ -225,15 +228,16 @@ def simulate_shelf_life_ode(T_celsius, months_max, C1_0, C2_0, C_CsA_mM, c_pvp_w
         dpH_dt = 1.5 * (dC1_dt * 1e-3) / c["beta_buf"]
         return [dC1_dt, dpH_dt]
 
-    t_eval = np.linspace(0, months_max, 40)
-    sol = solve_ivp(rhs, [0, months_max], [C1_0, pH_0], t_eval=t_eval)
+    t_eval = np.linspace(0.0, float(months_max), 40)
+    sol = solve_ivp(rhs, [0.0, float(months_max)], [C1_0, pH_0], t_eval=t_eval)
     records = []
     for i, t_m in enumerate(sol.t):
-        c1_t, ph_t = sol.y[0, i], sol.y[1, i]
+        c1_t = float(sol.y[0, i])
+        ph_t = float(sol.y[1, i])
         st_eq = solve_equilibrium_micelle(c1_t, C2_0, C_CsA_mM, T, c_pvp_wt, beta_12, c)
         records.append({
             "Month": float(t_m), "Intact_HCO40_pct": float((c1_t / C1_0) * 100.0),
-            "pH": float(ph_t), "S_eq_mg_mL": float(st_eq["S_tot_eq_mg_mL"]),
+            "pH": ph_t, "S_eq_mg_mL": float(st_eq["S_tot_eq_mg_mL"]),
             "S_R": float(st_eq["S_R"]), "D_h_nm": float(st_eq["D_h_nm"])
         })
     return pd.DataFrame(records)
@@ -286,9 +290,9 @@ def run_compounding_pbe(C1_0, C2_0, C_CsA_mM, c_pvp_wt, beta_12, V_batch_L, D_im
 
     W_redist = np.zeros((M, M))
     for j in range(1, M):
-        if Fiss_rate[j] > 0:
+        if Fiss_rate[j] > 0.0:
             w = np.exp(-0.5 * ((D_grid[:j] - D_eq * 1.12) / (0.32 * D_eq)) ** 2)
-            if np.sum(w) > 0:
+            if np.sum(w) > 0.0:
                 W_redist[:j, j] = w / np.sum(w)
 
     k_AW = 0.025 * (shear_rate ** 0.35) * np.exp(-1500.0 * (1.0 / T_K - 1.0 / 333.15))
@@ -316,12 +320,13 @@ def run_compounding_pbe(C1_0, C2_0, C_CsA_mM, c_pvp_wt, beta_12, V_batch_L, D_im
         dcryst_dt = 0.0
         if t <= t_feed_s and Da_mix > 0.12:
             dcryst_dt = (900.0 / t_feed_s) * (1.0 - np.exp(-1.8 * (Da_mix - 0.12)))
-        elif t > t_feed_s and cryst_ppm > 0 and eq_state["S_R"] < 1.0:
+        elif t > t_feed_s and cryst_ppm > 0.0 and eq_state["S_R"] < 1.0:
             dcryst_dt = -0.0004 * (1.0 - eq_state["S_R"]) * cryst_ppm
         return np.concatenate([dV_dt, [dcryst_dt]])
 
     sol = solve_ivp(pbe_ode, [0.0, t_total_s], y0, t_eval=t_eval, method="RK45")
-    traj_records, psd_snapshots = [], {}
+    traj_records = []
+    psd_snapshots = {}
     snap_indices = [int(0.15 * len(t_eval)), int(0.45 * len(t_eval)), int(0.70 * len(t_eval)), len(t_eval) - 1]
     grad_logD = np.gradient(np.log10(D_grid))
 
@@ -353,7 +358,10 @@ def run_compounding_pbe(C1_0, C2_0, C_CsA_mM, c_pvp_wt, beta_12, V_batch_L, D_im
     }
 
 def simulate_sterile_filtration(mem_params, A_EFA_cm2, L_m_um, Q_filt_mL_min, V_tot_mL, c_hco_wt, c_oc40_wt, c_csa_wt, c):
-    eps_m, tau_m, rho_p, A_sp = mem_params["eps_m"], mem_params["tau_m"], mem_params["rho_p"], mem_params["A_sp"]
+    eps_m = mem_params["eps_m"]
+    tau_m = mem_params["tau_m"]
+    rho_p = mem_params["rho_p"]
+    A_sp = mem_params["A_sp"]
     L_cm = L_m_um * 1e-4
     Q_cm3_s = Q_filt_mL_min / 60.0
     u_z_cm_s = (Q_cm3_s / A_EFA_cm2) / eps_m
@@ -366,9 +374,13 @@ def simulate_sterile_filtration(mem_params, A_EFA_cm2, L_m_um, Q_filt_mL_min, V_
     C_CsA_in_mg = c_csa_wt * 10.0
     CMC_mix_mM = 0.0082
     CMC_mix_mg = CMC_mix_mM * MW_surf_avg / 1e3
-    K_m_part, kappa_mg_mg, S_w_mg = 480.0, 0.098, 0.023
+    K_m_part = 480.0
+    kappa_mg_mg = 0.098
+    S_w_mg = 0.023
 
-    d_pore_cm, r_p0_nm, D_eff = 0.22e-4, 110.0, 2.4e-7
+    d_pore_cm = 0.22e-4
+    r_p0_nm = 110.0
+    D_eff = 2.4e-7
     Gz = (u_z_cm_s * (d_pore_cm ** 2)) / (D_eff * L_cm * tau_m)
     Sh = 3.66 + (0.0668 * Gz) / (1.0 + 0.04 * (Gz ** (2.0 / 3.0)))
     k_f = (Sh * D_eff) / d_pore_cm
@@ -401,17 +413,20 @@ def simulate_sterile_filtration(mem_params, A_EFA_cm2, L_m_um, Q_filt_mL_min, V_
     t_eval = np.linspace(0.0, t_end_s, 100)
 
     def adr_ode(t, y):
-        C_s, C_d = np.maximum(0.0, y[:N_z]), np.maximum(0.0, y[N_z:2*N_z])
-        q_s, q_d = np.maximum(0.0, y[2*N_z:3*N_z]), np.maximum(0.0, y[3*N_z:4*N_z])
+        C_s = np.maximum(0.0, y[:N_z])
+        C_d = np.maximum(0.0, y[N_z:2*N_z])
+        q_s = np.maximum(0.0, y[2*N_z:3*N_z])
+        q_d = np.maximum(0.0, y[3*N_z:4*N_z])
         qs_st, qd_st = eq_q(C_s, C_d)
         dqs = k_LDF_surf * (qs_st - q_s)
         dqd = k_LDF_CsA * (qd_st - q_d)
 
-        dCs, dCd = np.zeros(N_z), np.zeros(N_z)
+        dCs = np.zeros(N_z)
+        dCd = np.zeros(N_z)
         dCs[0] = u_z_cm_s * (C_surf_in_mg - C_s[0]) / dz + D_ax * (C_s[1] - C_s[0]) / (dz**2) - solid_to_void * dqs[0]
         dCd[0] = u_z_cm_s * (C_CsA_in_mg - C_d[0]) / dz + D_ax * (C_d[1] - C_d[0]) / (dz**2) - solid_to_void * dqd[0]
-        dCs[1:-1] = -u_z_cm_s * (C_s[1:-1] - C_s[:-2]) / dz + D_ax * (C_s[2:] - 2*C_s[1:-1] + C_s[:-2]) / (dz**2) - solid_to_void * dqs[1:-1]
-        dCd[1:-1] = -u_z_cm_s * (C_d[1:-1] - C_d[:-2]) / dz + D_ax * (C_d[2:] - 2*C_d[1:-1] + C_d[:-2]) / (dz**2) - solid_to_void * dqd[1:-1]
+        dCs[1:-1] = -u_z_cm_s * (C_s[1:-1] - C_s[:-2]) / dz + D_ax * (C_s[2:] - 2.0*C_s[1:-1] + C_s[:-2]) / (dz**2) - solid_to_void * dqs[1:-1]
+        dCd[1:-1] = -u_z_cm_s * (C_d[1:-1] - C_d[:-2]) / dz + D_ax * (C_d[2:] - 2.0*C_d[1:-1] + C_d[:-2]) / (dz**2) - solid_to_void * dqd[1:-1]
         dCs[-1] = -u_z_cm_s * (C_s[-1] - C_s[-2]) / dz + D_ax * (C_s[-2] - C_s[-1]) / (dz**2) - solid_to_void * dqs[-1]
         dCd[-1] = -u_z_cm_s * (C_d[-1] - C_d[-2]) / dz + D_ax * (C_d[-2] - C_d[-1]) / (dz**2) - solid_to_void * dqd[-1]
         return np.concatenate([dCs, dCd, dqs, dqd])
@@ -420,8 +435,10 @@ def simulate_sterile_filtration(mem_params, A_EFA_cm2, L_m_um, Q_filt_mL_min, V_
     V_filt_arr = sol.t * Q_cm3_s
     records = []
     for idx, V_mL in enumerate(V_filt_arr):
-        C_s_out, C_d_out = max(0.0, sol.y[N_z - 1, idx]), max(0.0, sol.y[2*N_z - 1, idx])
-        q_s_p, q_d_p = sol.y[2*N_z:3*N_z, idx], sol.y[3*N_z:4*N_z, idx]
+        C_s_out = max(0.0, float(sol.y[N_z - 1, idx]))
+        C_d_out = max(0.0, float(sol.y[2*N_z - 1, idx]))
+        q_s_p = sol.y[2*N_z:3*N_z, idx]
+        q_d_p = sol.y[3*N_z:4*N_z, idx]
         delta_nm = ((q_s_p + q_d_p) / (1080.0 * A_sp)) * 1e5
         r_eff = np.maximum(25.0, r_p0_nm - delta_nm)
         tmp_ratio = float(np.mean((r_p0_nm / r_eff) ** 4))
@@ -459,7 +476,7 @@ def simulate_sterile_filtration(mem_params, A_EFA_cm2, L_m_um, Q_filt_mL_min, V_
     }
 
 # ==============================================================================
-# SIDEBAR OPERATING CONTROLS
+# 4. SIDEBAR OPERATING CONTROLS
 # ==============================================================================
 st.sidebar.title("Operating Setpoints")
 st.sidebar.subheader("1. Formulation Q1/Q2 (% w/v)")
@@ -488,7 +505,7 @@ shelf_25C = simulate_shelf_life_ode(25.0, 24.0, C1_0, C2_0, C_CsA_mM, c_pvp, pH_
 end_24m = shelf_25C.iloc[-1]
 
 # ==============================================================================
-# MAIN BANNER & KPI SCORECARD
+# 5. MAIN BANNER & KPI SCORECARD
 # ==============================================================================
 st.title("First-Principles Ophthalmic Nanomicellar Process Engineering Workbench")
 st.markdown(
@@ -505,12 +522,12 @@ k5.metric("Steric Barrier V_max", f"{V_max_25:.1f} k_B T", f"log₁₀(W) = {log
 k6.metric("24-Mo Intact HCO-40", f"{end_24m['Intact_HCO40_pct']:.1f}%", f"pH = {end_24m['pH']:.2f}")
 
 tab_theory, tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "📖 1. Theory, Equations, Assumptions & Constants",
-    "🎯 2. QbD Design Space & MODR",
-    "⚙️ 3. Compounding PBE & Scale-Up",
-    "🧪 4. Colloidal DLVO & 24-Mo Stability",
-    "🏭 5. Multi-Scale Reactor Comparison",
-    "🔬 6. 0.22 μm Sterile Filtration"
+    "1. Theory, Equations & Constants",
+    "2. QbD Design Space & MODR",
+    "3. Compounding PBE & Scale-Up",
+    "4. Colloidal DLVO & 24-Mo Stability",
+    "5. Multi-Scale Reactor Comparison",
+    "6. 0.22 μm Sterile Filtration"
 ])
 
 # ==============================================================================
@@ -524,23 +541,23 @@ with tab_theory:
 
     In a **Binary Polymeric Nanomicellar System (NCELL® / Cequa® $0.09\\%\\text{ w/v}$ architecture)**, two non-ionic amphiphilic surfactants self-assemble into optically clear ($D_h \\approx 18\\text{--}24\\text{ nm}$) core–shell nanocarriers:
     1. **Primary Surfactant — Polyoxyl 40 Hydrogenated Castor Oil (HCO-40, $1.00\\%\\text{ w/v}$):** Possesses a bulky, three-branched 12-hydroxystearate hydrophobic tail and a 40-unit polyethylene oxide (PEO-40) hydrophilic headgroup. Alone, its branched tail leaves steric free-volume voids in the micellar core.
-    2. **Co-Surfactant — Octoxynol-40 ($0.05\\%\\text{ w/v}$):** Possesses a compact, planar $p$-tert-octylphenyl hydrophobic tail and a PEO-40 corona. Intercalating Octoxynol-40 between the bulky HCO-40 chains reliefs core packing frustration, yielding a strongly negative **Rubingh interaction parameter ($\\beta_{12} \\approx -2.45$)**. This depresses the mixed critical micelle concentration ($\\text{CMC}_{\\text{mix}}$) nearly $2\\times$ below ideal mixing, preventing premature micellar disassembly upon 1:5 tear-film dilution.
+    2. **Co-Surfactant — Octoxynol-40 ($0.05\\%\\text{ w/v}$):** Possesses a compact, planar $p$-tert-octylphenyl hydrophobic tail and a PEO-40 corona. Intercalating Octoxynol-40 between the bulky HCO-40 chains relieves core packing frustration, yielding a strongly negative **Rubingh interaction parameter ($\\beta_{12} \\approx -2.45$)**. This depresses the mixed critical micelle concentration ($\\text{CMC}_{\\text{mix}}$) nearly $2\\times$ below ideal mixing, preventing premature micellar disassembly upon 1:5 tear-film dilution.
     3. **Mucoadhesive Polymer — Povidone K90 (PVP, $0.30\\%\\text{ w/v}$):** Associates with the outer PEO-40 brush via hydrogen-bonding/hydrophobic stabilization, lowering the critical aggregation concentration (CAC) and increasing precorneal residence time.
     """)
 
     st.markdown("---")
     st.subheader("2. Fundamental Engineering & Physical Assumptions")
     st.markdown("""
-    * **A1. Pseudophase Separation & Regular Solution Approximation:** Micelles ($N_{\\text{agg}} \\approx 120\\text{--}220$) are treated as a thermodynamic pseudophase in chemical potential equilibrium with monomeric surfactant in the bulk aqueous phase. Excess entropy of tail mixing in the core is assumed negligible compared to enthalpic tail-packing synergy ($\\Delta G_{\\text{mix}}^{\\text{E}} \\approx RT \\beta_{12} x_1 x_2$).
+    * **A1. Pseudophase Separation & Regular Solution Approximation:** Micelles ($N_{\\text{agg}} \\approx 120\\text{--}220$) are treated as a thermodynamic pseudophase in chemical potential equilibrium with monomeric surfactant in the bulk aqueous phase ($\\Delta G_{\\text{mix}}^{\\text{E}} \\approx RT \\beta_{12} x_1 x_2$).
     * **A2. Spherical Core–Corona Geometry with Incompressible Volume Additivity:** The hydrophobic core radius $R_c$ is determined strictly by the sum of surfactant tail molecular volumes ($v_{t,1}, v_{t,2}$) and solubilized drug volume ($v_{\\text{CsA}}$), bounded by a sharp hydrocarbon–water interface ($\\sigma_{\\text{core/w}} \\approx 30\\text{ mN/m}$).
-    * **A3. High-Ionic-Strength Electrostatic Screening:** In $0.125\\text{ M}$ sodium phosphate + NaCl buffer, the Debye screening length is $\\kappa^{-1} \\approx 0.86\\text{ nm}$. Because both surfactants are non-ionic, electrostatic double-layer repulsion is zero; colloidal stability is governed strictly by **Hamaker van der Waals attraction ($V_{\\text{vdW}}$)** versus **Vincent–Napper PEO-40 osmotic + elastic brush repulsion ($V_{\\text{osm}} + V_{\\text{el}}$)**.
-    * **A4. Selective Ester Cleavage on Shelf-Life:** HCO-40 contains 3 hydrolysable glycerol–hydroxystearate ester linkages per molecule that undergo specific acid ($k_H$), neutral ($k_0$), and base ($k_{OH}$) catalyzed hydrolysis following Arrhenius kinetics ($E_a = 78.5\\text{ kJ/mol}$). Octoxynol-40 is an ether-linked octylphenol ethoxylate and is chemically non-hydrolysable over 24 months.
-    * **A5. Fast Aniansson–Wall Monomer Exchange in $0.22\\text{ }\\mu\\text{m}$ Membrane Pores:** The micelle–monomer relaxation time ($\\tau_{\\text{AW}} \\sim 2\\text{ ms}$) is two orders of magnitude shorter than the hydraulic residence time inside the sterilizing membrane ($\\tau_{\\text{res}} = \\varepsilon_m L_m / J_v \\sim 0.4\\text{ s}$), maintaining local monomer–micelle equilibrium across every axial node $z$.
+    * **A3. High-Ionic-Strength Electrostatic Screening:** In $0.125\\text{ M}$ sodium phosphate + NaCl buffer, the Debye length is $\\kappa^{-1} \\approx 0.86\\text{ nm}$. Because both surfactants are non-ionic, colloidal stability is governed by **Hamaker van der Waals attraction ($V_{\\text{vdW}}$)** versus **Vincent–Napper PEO-40 osmotic + elastic brush repulsion ($V_{\\text{osm}} + V_{\\text{el}}$)**.
+    * **A4. Selective Ester Cleavage on Shelf-Life:** HCO-40 contains hydrolysable glycerol–hydroxystearate ester linkages that undergo specific acid ($k_H$), neutral ($k_0$), and base ($k_{OH}$) catalyzed hydrolysis ($E_a = 78.5\\text{ kJ/mol}$). Octoxynol-40 is an ether-linked ethoxylate and is chemically non-hydrolysable over 24 months.
+    * **A5. Fast Aniansson–Wall Monomer Exchange in $0.22\\text{ }\\mu\\text{m}$ Membrane Pores:** The micelle–monomer relaxation time ($\\tau_{\\text{AW}} \\sim 2\\text{ ms}$) is much faster than the membrane pore residence time ($\\tau_{\\text{res}} \\sim 0.4\\text{ s}$), maintaining local monomer–micelle equilibrium across every axial node $z$.
     """)
 
     st.markdown("---")
     st.subheader("3. Interactive Manual Constants Editor (Live Override Across All Tabs)")
-    st.info("Modify any physical, thermodynamic, kinetic, or membrane constant below. All equations, step-by-step live calculations, and simulation tabs update automatically.")
+    st.info("Modify any physical, thermodynamic, kinetic, or membrane constant below. All equations, live walkthrough numbers, and simulation charts update automatically.")
 
     if st.button("Reset All Constants to Literature Defaults"):
         st.session_state.consts = DEFAULT_CONSTANTS.copy()
@@ -582,8 +599,8 @@ with tab_theory:
             c_dict["dC_p"] = st.number_input("Cyclosporine A δ_p,CsA (MPa^0.5)", 0.5, 12.0, float(c_dict["dC_p"]), 0.1)
             c_dict["dC_h"] = st.number_input("Cyclosporine A δ_h,CsA (MPa^0.5)", 0.5, 15.0, float(c_dict["dC_h"]), 0.1)
             c_dict["Ea_hyd"] = st.number_input("HCO-40 Hydrolysis Activation Energy E_a (J/mol)", 30000.0, 130000.0, float(c_dict["Ea_hyd"]), 500.0)
-            c_dict["k_H"] = st.number_input("Acid Rate Constant k_H (month⁻¹ M⁻¹)", 1e-4, 1.0, float(c_dict["k_H"]), 1e-3, format="%.4f")
-            c_dict["k_0"] = st.number_input("Neutral Rate Constant k_0 (month⁻¹)", 1e-5, 1e-2, float(c_dict["k_0"]), 5e-5, format="%.5f")
+            c_dict["k_H"] = st.number_input("Acid Rate Constant k_H (month⁻¹ M⁻¹)", 0.0001, 1.0, float(c_dict["k_H"]), 0.001, format="%.4f")
+            c_dict["k_0"] = st.number_input("Neutral Rate Constant k_0 (month⁻¹)", 0.00001, 0.01, float(c_dict["k_0"]), 0.00005, format="%.5f")
             c_dict["k_OH"] = st.number_input("Base Rate Constant k_OH (month⁻¹ M⁻¹)", 10.0, 10000.0, float(c_dict["k_OH"]), 10.0)
 
         with st.expander("D. Reactor Impeller (PBE) & Custom 0.22 μm Membrane Constants", expanded=False):
@@ -597,7 +614,6 @@ with tab_theory:
             c_dict["qmax_surf_II"] = st.number_input("Site II PEO Corona Capacity q_max,surf^II (mg/g)", 0.10, 15.0, float(c_dict["qmax_surf_II"]), 0.10)
             c_dict["omega_co"] = st.number_input("Admicellar CsA Co-Adsorption Factor ω_co", 0.0, 1.0, float(c_dict["omega_co"]), 0.02)
 
-    # Re-evaluate live walkthrough metrics with updated constants
     st_live = solve_equilibrium_micelle(C1_0, C2_0, C_CsA_mM, 298.15, c_pvp, beta_12_val, c_dict)
     pbe_live = run_compounding_pbe(C1_0, C2_0, C_CsA_mM, c_pvp, beta_12_val, V_batch, D_imp, rpm_val, t_feed, T_comp, c_dict)
     filt_live = simulate_sterile_filtration(c_dict, 1000.0, 240.0, 150.0, 500.0, c_hco, c_oc40, c_csa, c_dict)
@@ -610,7 +626,7 @@ with tab_theory:
     st.latex(r"\frac{x_1^2 \ln\left(\frac{\alpha_1 \text{CMC}_{\text{mix}}}{x_1 \text{CMC}_1}\right)}{(1 - x_1)^2 \ln\left(\frac{(1 - \alpha_1) \text{CMC}_{\text{mix}}}{(1 - x_1) \text{CMC}_2}\right)} = 1, \quad \gamma_1 = \exp\left[\beta_{12}(1-x_1)^2\right], \quad \frac{1}{\text{CMC}_{\text{mix}}} = \frac{\alpha_1}{\gamma_1 \text{CMC}_1} + \frac{1-\alpha_1}{\gamma_2 \text{CMC}_2}")
     st.code(
         f"[Live Calculation @ T = 298.15 K]\n"
-        f"  Bulk Molar Concentrations : C1 (HCO-40) = {C1_0:.4f} mM | C2 (OC-40) = {C2_0:.4f} mM | Bulk Mole Fraction alpha_1 = {st_live['alpha_1']:.4f}\n"
+        f"  Bulk Molar Concentrations : C1 (HCO-40) = {C1_0:.4f} mM | C2 (OC-40) = {C2_0:.4f} mM | Bulk alpha_1 = {st_live['alpha_1']:.4f}\n"
         f"  Salted-Out Pure CMCs      : CMC_1 = {st_live['CMC1']:.5f} mM | CMC_2 = {st_live['CMC2']:.5f} mM\n"
         f"  Rubingh Root & Activities : Micellar x_1 = {st_live['x1']:.4f} | gamma_1 = {st_live['gamma1']:.4f} | gamma_2 = {st_live['gamma2']:.4f}\n"
         f"  Synergistic Mixed CMC     : CMC_mix = {st_live['CMC_mix']:.5f} mM  (vs. Ideal Clint CMC_ideal = {st_live['CMC_ideal']:.5f} mM)",
@@ -634,7 +650,7 @@ with tab_theory:
     st.latex(r"S_{\text{tot}}^{\text{eq}}(t, T) = S_w(T) + \kappa(T, \chi_{\text{dc}}, R_c)\left[C_{\text{surf,tot}}(t) - \text{CMC}_{\text{mix}}(t, T)\right], \quad S_R(t, T) = \frac{C_{\text{CsA,nominal}}}{S_{\text{tot}}^{\text{eq}}(t, T)}")
     st.code(
         f"[Live Calculation @ C_CsA,nominal = {c_csa:.2f}% w/v ({C_CsA_mM:.3f} mM)]\n"
-        f"  Core-Drug Compatibility : Flory-Huggins chi_dc = {st_live['chi_dc']:.4f} | Laplace Penalty (2*sigma*v_CsA / R_c*k_B*T) = {st_live['laplace_kT']:.3f} k_B*T\n"
+        f"  Core-Drug Compatibility : Flory-Huggins chi_dc = {st_live['chi_dc']:.4f} | Laplace Penalty = {st_live['laplace_kT']:.3f} k_B*T\n"
         f"  Solubilization Capacity : Molar kappa = {st_live['kappa']:.4f} mol CsA / mol micellar surfactant | Intrinsic S_w = {st_live['S_w_mM']:.4f} mM\n"
         f"  Total Equilibrium Solub.: S_tot^eq(t=0) = {st_live['S_tot_eq_mg_mL']:.3f} mg/mL ({st_live['S_tot_eq_mM']:.3f} mM)\n"
         f"  Supersaturation Ratio   : S_R(t=0) = {st_live['S_R']:.3f}  |  S_R(t=24 mo @ 25 C) = {end_24m['S_R']:.3f}",
@@ -673,6 +689,7 @@ with tab_theory:
 # ==============================================================================
 with tab1:
     st.subheader("2D Quality by Design (QbD) Response Surfaces & Method Operable Design Region (MODR)")
+    grid_res = 16
     c_left, c_right = st.columns([1, 3])
     with c_left:
         design_axes = st.radio(
@@ -680,14 +697,15 @@ with tab1:
             ["Surfactant Space (HCO-40 % vs. Octoxynol-40 %)",
              "Chemical Stability Space (Initial pH vs. Storage Temp °C)"]
         )
-        
+        grid_res = int(st.slider("Contour Grid Resolution", 10, 22, 16, 2))
         st.markdown("**MODR Criteria:** $S_R(24\\text{ mo}) \\le 1.00$, $18 \\le D_h \\le 24.5\\text{ nm}$, $6.5 \\le \\text{pH} \\le 7.2$.")
 
     with c_right:
         if "Surfactant Space" in design_axes:
             hco_grid = np.linspace(0.50, 1.60, grid_res)
             oc_grid = np.linspace(0.01, 0.20, grid_res)
-            SR_24_mat, Dh_mat = np.zeros((grid_res, grid_res)), np.zeros((grid_res, grid_res))
+            SR_24_mat = np.zeros((grid_res, grid_res))
+            Dh_mat = np.zeros((grid_res, grid_res))
             ret_24m = end_24m["Intact_HCO40_pct"] / 100.0
 
             for i, oc_v in enumerate(oc_grid):
@@ -712,7 +730,8 @@ with tab1:
         else:
             pH_grid = np.linspace(6.0, 7.6, grid_res)
             T_grid = np.linspace(5.0, 42.0, grid_res)
-            SR_mat, HCO_ret_mat = np.zeros((grid_res, grid_res)), np.zeros((grid_res, grid_res))
+            SR_mat = np.zeros((grid_res, grid_res))
+            HCO_ret_mat = np.zeros((grid_res, grid_res))
             for i, T_val in enumerate(T_grid):
                 T_K = T_val + 273.15
                 pKw = 14.0 - 0.032 * (T_val - 25.0)
@@ -800,11 +819,13 @@ with tab4:
         ["Constant Specific Power Input (ε = P/V)", "Constant Impeller Tip Speed (v_tip = π N Dᵢ)", "Constant Micromixing Damköhler Number (Da_mix)"]
     )
     scales = [{"Scale": "Lab R&D Batch", "V_L": 5.0, "D_i_m": 0.08}, {"Scale": "Pilot GMP Scale", "V_L": 50.0, "D_i_m": 0.18}, {"Scale": "Commercial Scale", "V_L": 500.0, "D_i_m": 0.38}]
-    base_eps, base_tip = pbe_res["metrics"]["epsilon_W_kg"], pbe_res["metrics"]["v_tip_m_s"]
+    base_eps = pbe_res["metrics"]["epsilon_W_kg"]
+    base_tip = pbe_res["metrics"]["v_tip_m_s"]
 
     comp_rows = []
     for s in scales:
-        V_s, D_s = s["V_L"], s["D_i_m"]
+        V_s = s["V_L"]
+        D_s = s["D_i_m"]
         if "Constant Specific Power" in scale_criterion:
             N_rps = ((base_eps * (V_s * 1e-3)) / (c_dict["N_p"] * (D_s ** 5))) ** (1.0 / 3.0)
         elif "Constant Impeller Tip" in scale_criterion:
@@ -839,7 +860,9 @@ with tab5:
 
     active_mem = c_dict if mem_mode == "Use Manual Constants from Tab 1" else MEMBRANE_PRESETS[mem_mode]
     res_f = simulate_sterile_filtration(active_mem, A_efa, L_bed, Q_flow, V_sim, c_hco, c_oc40, c_csa, c_dict)
-    sf, df_bt, df_vials = res_f["summary"], res_f["df_bt"], res_f["df_vials"]
+    sf = res_f["summary"]
+    df_bt = res_f["df_bt"]
+    df_vials = res_f["df_vials"]
 
     f1, f2, f3, f4, f5, f6 = st.columns(6)
     f1.metric("Pre-Flush to 98% Assay", f"{sf['V_flush_98_mL']:.1f} mL", f"{sf['BFS_Vials_Lost_98']} BFS Vials")
@@ -864,3 +887,4 @@ with tab5:
         fig_f1.update_yaxes(title_text="Filtrate Potency (%)", range=[0, 105])
         fig_f1.update_layout(height=420, margin=dict(l=20, r=20, t=40, b=20))
         st.plotly_chart(fig_f1, use_container_width=True)
+# === END OF FILE ===
